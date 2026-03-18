@@ -1,0 +1,301 @@
+#!/bin/sh
+
+set -eu
+
+if [ -f "$HOME/.config/shell/path.sh" ]; then
+    # Align this report with the shared shell bootstrap used by fresh shells.
+    . "$HOME/.config/shell/path.sh"
+fi
+
+FORMAT=human
+
+usage() {
+    cat <<'EOF'
+Usage: scripts/show-dev-env [--json]
+
+Show the current coding-agent development environment status.
+
+Options:
+  --json    Emit machine-readable JSON instead of the default table
+  -h, --help  Show this help text
+EOF
+}
+
+if [ "${1:-}" = "--json" ]; then
+    FORMAT=json
+    shift
+elif [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    usage
+    exit 0
+fi
+
+if [ "$#" -ne 0 ]; then
+    usage >&2
+    exit 1
+fi
+
+GENERATED_AT=$(date '+%Y-%m-%d %H:%M:%S %Z')
+PLAN_SUMMARY='Lean baseline with Homebrew + mise + direnv + uv + pnpm; Java and containers stay deferred as Future.'
+
+json_escape() {
+    printf '%s' "$1" | /usr/bin/python3 -c 'import json, sys; print(json.dumps(sys.stdin.read())[1:-1], end="")'
+}
+
+app_version() {
+    app_path=$1
+    /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist" 2>/dev/null || true
+}
+
+command_path() {
+    command -v "$1" 2>/dev/null || true
+}
+
+version_for() {
+    tool=$1
+
+    case "$tool" in
+        brew)
+            brew --version | awk 'NR==1 {print $2}'
+            ;;
+        mise)
+            mise --version | awk 'NR==1 {print $1}'
+            ;;
+        direnv)
+            direnv version | awk 'NR==1 {print $1}'
+            ;;
+        uv)
+            uv --version | awk 'NR==1 {print $2}'
+            ;;
+        node)
+            node -v
+            ;;
+        npm)
+            npm -v
+            ;;
+        pnpm)
+            pnpm -v
+            ;;
+        go)
+            go version | awk 'NR==1 {print $3}'
+            ;;
+        gh)
+            gh --version | awk 'NR==1 {print $3}'
+            ;;
+        rg)
+            rg --version | awk 'NR==1 {print $2}'
+            ;;
+        fd)
+            fd --version | awk 'NR==1 {print $2}'
+            ;;
+        fzf)
+            fzf --version | awk 'NR==1 {print $1}'
+            ;;
+        just)
+            just --version | awk 'NR==1 {print $2}'
+            ;;
+        git)
+            git --version | awk 'NR==1 {print $3}'
+            ;;
+        codex)
+            codex --version 2>/dev/null | awk 'NR==1 {print $2}'
+            ;;
+        claude)
+            claude --version 2>/dev/null | awk 'NR==1 {print $1}'
+            ;;
+        antigravity)
+            antigravity --version 2>/dev/null | awk 'NR==1 {print $1}'
+            ;;
+        opencode)
+            if opencode --version >/dev/null 2>&1; then
+                opencode --version 2>/dev/null | awk 'NR==1 {print $NF}'
+            elif opencode version >/dev/null 2>&1; then
+                opencode version 2>/dev/null | awk 'NR==1 {print $NF}'
+            else
+                printf 'unknown'
+            fi
+            ;;
+        java)
+            java -version 2>&1 | awk -F'"' '/version/ {print $2; exit}'
+            ;;
+        gradle)
+            gradle --version 2>/dev/null | awk '/^Gradle / {print $2; exit}'
+            ;;
+        mvn)
+            mvn -v 2>/dev/null | awk 'NR==1 {print $3}'
+            ;;
+        docker)
+            docker --version 2>/dev/null | awk -F'[ ,]+' 'NR==1 {print $3}'
+            ;;
+        orbstack)
+            app_version "/Applications/OrbStack.app"
+            ;;
+        podman)
+            podman --version 2>/dev/null | awk 'NR==1 {print $3}'
+            ;;
+        *)
+            printf ''
+            ;;
+    esac
+}
+
+inspect_tool() {
+    tool=$1
+    category=$2
+    plan=$3
+    note=$4
+
+    installed=false
+    path=
+    version=
+
+    case "$tool" in
+        orbstack)
+            if [ -d /Applications/OrbStack.app ]; then
+                installed=true
+                path=/Applications/OrbStack.app
+                version=$(version_for "$tool" 2>/dev/null || true)
+            fi
+            ;;
+        java)
+            java_home=$(/usr/libexec/java_home 2>/dev/null || true)
+            if [ -n "$java_home" ] && [ -x "$java_home/bin/java" ]; then
+                installed=true
+                path=$java_home/bin/java
+                version=$(version_for "$tool" 2>/dev/null || true)
+            fi
+            ;;
+        *)
+            path=$(command_path "$tool")
+            if [ -n "$path" ]; then
+                installed=true
+                version=$(version_for "$tool" 2>/dev/null || true)
+            fi
+            ;;
+    esac
+
+    if [ "$installed" = true ] && [ -z "$version" ]; then
+        version='unknown'
+    fi
+
+    if [ "$installed" = true ]; then
+        case "$plan" in
+            future)
+                state='installed-future'
+                ;;
+            keep)
+                state='kept'
+                ;;
+            *)
+                state='installed'
+                ;;
+        esac
+    else
+        case "$plan" in
+            future)
+                state='deferred'
+                ;;
+            *)
+                state='missing'
+                ;;
+        esac
+        path='-'
+        version='-'
+    fi
+
+    printf '%s|%s|%s|%s|%s|%s|%s\n' "$category" "$plan" "$state" "$tool" "$version" "$path" "$note"
+}
+
+collect_records() {
+    inspect_tool brew system now 'System package manager'
+    inspect_tool mise runtime now 'Cross-language runtime manager'
+    inspect_tool direnv runtime now 'Repo-local environment activation'
+    inspect_tool uv python keep 'Python runtime and dependency workflow'
+    inspect_tool node node now 'Managed by mise'
+    inspect_tool npm node keep 'Bundled with Node'
+    inspect_tool pnpm node now 'Default JS/TS package manager'
+    inspect_tool go go now 'Managed by mise'
+    inspect_tool git core keep 'Version control'
+    inspect_tool gh core now 'GitHub CLI'
+    inspect_tool rg core now 'ripgrep search tool'
+    inspect_tool fd core now 'Fast file finder'
+    inspect_tool fzf core now 'Fuzzy finder'
+    inspect_tool just core now 'Task runner'
+    inspect_tool codex agent keep 'OpenAI coding agent'
+    inspect_tool claude agent keep 'Anthropic coding agent'
+    inspect_tool antigravity agent keep 'Antigravity CLI'
+    inspect_tool opencode agent keep 'OpenCode CLI'
+    inspect_tool java future future 'Deferred Java runtime on this Mac'
+    inspect_tool gradle future future 'Deferred; prefer project wrapper when needed'
+    inspect_tool mvn future future 'Deferred; prefer project wrapper when needed'
+    inspect_tool docker future future 'Deferred container CLI'
+    inspect_tool orbstack future future 'Deferred container runtime'
+    inspect_tool podman future future 'Deferred alternative container runtime'
+}
+
+render_human() {
+    printf 'Agentic Dev Env Status\n'
+    printf 'Generated: %s\n' "$GENERATED_AT"
+    printf 'Plan-of-record: %s\n\n' "$PLAN_SUMMARY"
+    printf '%-9s %-16s %-14s %-15s %-48s %s\n' "PLAN" "STATE" "TOOL" "VERSION" "PATH" "NOTE"
+    printf '%-9s %-16s %-14s %-15s %-48s %s\n' "---------" "----------------" "--------------" "---------------" "------------------------------------------------" "------------------------------"
+
+    collect_records | while IFS='|' read -r category plan state tool version path note; do
+        printf '%-9s %-16s %-14s %-15s %-48s %s\n' "$plan" "$state" "$tool" "$version" "$path" "$note"
+    done
+}
+
+render_json() {
+    printf '{\n'
+    printf '  "generated_at": "%s",\n' "$(json_escape "$GENERATED_AT")"
+    printf '  "plan_of_record": "%s",\n' "$(json_escape "$PLAN_SUMMARY")"
+    printf '  "tools": [\n'
+
+    first=true
+    collect_records | while IFS='|' read -r category plan state tool version path note; do
+        if [ "$first" = true ]; then
+            first=false
+        else
+            printf ',\n'
+        fi
+
+        installed=false
+        if [ "$state" = "installed" ] || [ "$state" = "kept" ] || [ "$state" = "installed-future" ]; then
+            installed=true
+        fi
+
+        if [ "$path" = "-" ]; then
+            json_path='null'
+        else
+            json_path=$(printf '"%s"' "$(json_escape "$path")")
+        fi
+
+        if [ "$version" = "-" ]; then
+            json_version='null'
+        else
+            json_version=$(printf '"%s"' "$(json_escape "$version")")
+        fi
+
+        printf '    {\n'
+        printf '      "name": "%s",\n' "$(json_escape "$tool")"
+        printf '      "category": "%s",\n' "$(json_escape "$category")"
+        printf '      "plan_status": "%s",\n' "$(json_escape "$plan")"
+        printf '      "state": "%s",\n' "$(json_escape "$state")"
+        printf '      "installed": %s,\n' "$installed"
+        printf '      "version": %s,\n' "$json_version"
+        printf '      "path": %s,\n' "$json_path"
+        printf '      "note": "%s"\n' "$(json_escape "$note")"
+        printf '    }'
+    done
+
+    printf '\n  ]\n'
+    printf '}\n'
+}
+
+case "$FORMAT" in
+    human)
+        render_human
+        ;;
+    json)
+        render_json
+        ;;
+esac
