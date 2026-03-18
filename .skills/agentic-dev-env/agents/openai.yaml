@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentic Dev Env"
+  short_description: "Baseline and audit agent runtimes"
+  default_prompt: "Use $agentic-dev-env to inspect this machine, align it to the baseline, and update the machine status record."
